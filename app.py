@@ -102,7 +102,7 @@ def localize_fx_records(frame):
     return localized
 
 # ==================== 頁面設定 ====================
-st.set_page_config(page_title="股票買賣記錄與監控系統", layout="wide")
+st.set_page_config(page_title="Selene股票買賣記錄與監控系統", layout="wide")
 
 # ==================== 登入密碼管控驗證 ====================
 def check_password():
