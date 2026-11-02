@@ -1,0 +1,1186 @@
+from datetime import datetime
+from io import StringIO
+from zoneinfo import ZoneInfo
+
+import streamlit as st
+import pandas as pd
+import yfinance as yf
+import plotly.graph_objects as go
+import requests
+
+# * 11021110 換Google sheet：股票交易表的欄位名稱與順序；換表或改標題時，需同步新表標題列及 Apps Script 欄位對應。
+SHEET_COLUMNS = [
+    "股號", "股名", "類股", "種類", "交易狀態",
+    "預計買股金額", "預計買股數量", "預計買股花費金額",
+    "實際買股日期", "實際買股金額", "實際買股數量", "實際買股花費金額", "買股手續費",
+    "預計賣股金額", "預計賣股數量", "預計賣股所得金額",
+    "實際賣股日期", "實際賣股金額", "實際賣股數量", "實際賣股所得金額", "賣股手續費",
+    "英文股名", "當天收盤價／現價",
+]
+
+FX_CURRENCY_NAMES = {
+    "AED": "阿聯酋迪拉姆", "AFN": "阿富汗尼", "ALL": "阿爾巴尼亞列克",
+    "AMD": "亞美尼亞德拉姆", "ANG": "荷屬安地列斯盾", "AOA": "安哥拉寬扎",
+    "ARS": "阿根廷披索", "AUD": "澳幣", "AWG": "阿路巴盾",
+    "AZN": "亞塞拜然馬納特", "BAM": "波士尼亞-赫塞哥維納可轉換馬克",
+    "BBD": "巴貝多元", "BDT": "孟加拉塔卡", "BGN": "保加利亞列弗",
+    "BHD": "巴林第納爾", "BIF": "蒲隆地法郎", "BMD": "百慕達幣",
+    "BND": "汶萊元", "BOB": "玻利維亞諾", "BRL": "巴西雷亞爾",
+    "BSD": "巴哈馬元", "BTN": "不丹那特倫", "BWP": "波札那普拉",
+    "BYN": "白俄羅斯盧布", "BZD": "貝里斯元", "CAD": "加幣",
+    "CDF": "剛果法郎", "CHF": "瑞士法郎", "CLF": "智利記帳單位",
+    "CLP": "智利披索", "CNH": "離岸人民幣", "CNY": "人民幣",
+    "COP": "哥倫比亞披索", "CRC": "哥斯大黎加科朗", "CUP": "古巴披索",
+    "CVE": "維德角埃斯庫多", "CZK": "捷克克朗", "DJF": "吉布地法郎",
+    "DKK": "丹麥克朗", "DOP": "多明尼加披索", "DZD": "阿爾及利亞第納爾",
+    "EGP": "埃及鎊", "ERN": "厄利垂亞納克法", "ETB": "衣索比亞比爾",
+    "EUR": "歐元", "FJD": "斐濟元", "FKP": "福克蘭群島鎊",
+    "FOK": "法羅群島克朗", "GBP": "英鎊", "GEL": "喬治亞拉里",
+    "GGP": "根西島鎊", "GHS": "迦納塞地", "GIP": "直布羅陀鎊",
+    "GMD": "甘比亞達拉西", "GNF": "幾內亞法郎", "GTQ": "瓜地馬拉格查爾",
+    "GYD": "圭亞那元", "HKD": "港幣", "HNL": "宏都拉斯倫皮拉",
+    "HRK": "克羅埃西亞庫納", "HTG": "海地古德", "HUF": "匈牙利福林",
+    "IDR": "印尼盾", "ILS": "以色列新謝克爾", "IMP": "曼島鎊",
+    "INR": "印度盧比", "IQD": "伊拉克第納爾", "IRR": "伊朗里亞爾",
+    "ISK": "冰島克朗", "JEP": "澤西島鎊", "JMD": "牙買加元",
+    "JOD": "約旦第納爾", "JPY": "日圓", "KES": "肯亞先令",
+    "KGS": "吉爾吉斯索姆", "KHR": "柬埔寨瑞爾", "KID": "吉里巴斯元",
+    "KMF": "科摩羅法郎", "KRW": "韓元", "KWD": "科威特第納爾",
+    "KYD": "開曼群島元", "KZT": "哈薩克堅戈", "LAK": "寮國基普",
+    "LBP": "黎巴嫩鎊", "LKR": "斯里蘭卡盧比", "LRD": "賴比瑞亞元",
+    "LSL": "賴索托洛蒂", "LYD": "利比亞第納爾", "MAD": "摩洛哥迪拉姆",
+    "MDL": "摩爾多瓦列伊", "MGA": "馬達加斯加阿里亞里",
+    "MKD": "北馬其頓第納爾", "MMK": "緬甸元", "MNT": "蒙古圖格里克",
+    "MOP": "澳門元", "MRU": "茅利塔尼亞烏吉亞", "MUR": "模里西斯盧比",
+    "MVR": "馬爾地夫盧非亞", "MWK": "馬拉威克瓦查", "MXN": "墨西哥披索",
+    "MYR": "馬來西亞令吉", "MZN": "莫三比克梅蒂卡爾", "NAD": "納米比亞元",
+    "NGN": "奈及利亞奈拉", "NIO": "尼加拉瓜科多巴", "NOK": "挪威克朗",
+    "NPR": "尼泊爾盧比", "NZD": "紐西蘭幣", "OMR": "阿曼里亞爾",
+    "PAB": "巴拿馬巴波亞", "PEN": "秘魯索爾", "PGK": "巴布亞紐幾內亞基那",
+    "PHP": "菲律賓披索", "PKR": "巴基斯坦盧比", "PLN": "波蘭茲羅提",
+    "PYG": "巴拉圭瓜拉尼", "QAR": "卡達里亞爾", "RON": "羅馬尼亞列伊",
+    "RSD": "塞爾維亞戴納", "RUB": "俄羅斯盧布", "RWF": "盧安達法郎",
+    "SAR": "沙烏地里亞爾", "SBD": "索羅門群島元", "SCR": "塞席爾盧比",
+    "SDG": "蘇丹鎊", "SEK": "瑞典克朗", "SGD": "新加坡幣",
+    "SHP": "聖赫勒拿鎊", "SLE": "獅子山利昂", "SOS": "索馬利亞先令",
+    "SRD": "蘇利南元", "SSP": "南蘇丹鎊", "STN": "聖多美普林西比多布拉",
+    "SYP": "敘利亞鎊", "SZL": "史瓦帝尼里朗吉尼", "THB": "泰銖",
+    "TJS": "塔吉克索莫尼", "TMT": "土庫曼馬納特", "TND": "突尼西亞第納爾",
+    "TOP": "東加潘加", "TRY": "土耳其里拉", "TTD": "千里達及托巴哥元",
+    "TVD": "圖瓦盧元", "TWD": "新台幣", "TZS": "坦尚尼亞先令",
+    "UAH": "烏克蘭格里夫納", "UGX": "烏干達先令", "USD": "美元",
+    "UYU": "烏拉圭披索", "UZS": "烏茲別克索姆", "VES": "委內瑞拉玻利瓦",
+    "VND": "越南盾", "VUV": "萬那杜瓦圖", "WST": "薩摩亞塔拉",
+    "XAF": "中非法郎", "XCD": "東加勒比元", "XDR": "特別提款權",
+    "XOF": "西非法郎", "XPF": "太平洋法郎", "YER": "葉門里亞爾",
+    "ZAR": "南非蘭特", "ZMW": "尚比亞克瓦查", "ZWL": "辛巴威元",
+}
+
+
+def fx_currency_name(currency_code, fallback=None):
+    code = str(currency_code).strip().upper()
+    return FX_CURRENCY_NAMES.get(code) or fallback or code
+
+
+def fx_currency_label(currency_code):
+    code = str(currency_code).strip().upper()
+    name = FX_CURRENCY_NAMES.get(code)
+    return f"{name} ({code})" if name else code
+
+
+def localize_fx_records(frame):
+    if frame.empty or "幣別代碼" not in frame.columns:
+        return frame
+
+    localized = frame.copy()
+    if "幣別名稱" not in localized.columns:
+        localized.insert(1, "幣別名稱", "")
+    localized["幣別名稱"] = [
+        fx_currency_name(code, name if pd.notna(name) else None)
+        for code, name in zip(localized["幣別代碼"], localized["幣別名稱"])
+    ]
+    return localized
+
+# ==================== 頁面設定 ====================
+st.set_page_config(page_title="股票買賣記錄與監控系統", layout="wide")
+
+# ==================== 登入密碼管控驗證 ====================
+def check_password():
+    """驗證使用者輸入的密碼是否正確"""
+    def password_entered():
+        # 從 secrets 取得設定密碼，若未設定則預設為 "admin"
+        target_password = st.secrets.get("APP_PASSWORD", "admin")
+        if st.session_state["password_input"] == target_password:
+            st.session_state["password_correct"] = True
+            del st.session_state["password_input"]  # 清除輸入暫存
+        else:
+            st.session_state["password_correct"] = False
+
+    # 若尚未紀錄登入狀態，預設為 False
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
+
+    # 若尚未登入，顯示登入介面
+    if not st.session_state["password_correct"]:
+        st.title("🔒 系統登入認證")
+        st.text_input(
+            "請輸入系統存取密碼：",
+            type="password",
+            on_change=password_entered,
+            key="password_input"
+        )
+        if "password_correct" in st.session_state and not st.session_state["password_correct"]:
+            st.error("❌ 密碼錯誤，請重新輸入！")
+        return False
+    else:
+        return True
+
+# 執行驗證；若驗證未通過則停止執行後續程式碼
+if not check_password():
+    st.stop()
+
+# ==================== 主系統畫面 (登入成功後呈現) ====================
+# * 11021110 換Google sheet：在 Streamlit secrets 更新 GAS_WEB_APP_URL 為新試算表所部署的 Apps Script 網址；
+#   並確認 Apps Script 內的試算表 ID、工作表名稱及股票／匯率資料格式已一併更新。
+GAS_WEB_APP_URL = st.secrets.get("GAS_WEB_APP_URL", "請在此處貼上你的_GAS_WEB_APP_URL")
+
+# 側邊欄增加系統切換與登出按鈕
+with st.sidebar:
+    st.write("👤 登入狀態：已驗證")
+    selected_system = st.radio(
+        "系統選單",
+        ["股票買賣記錄與即時監控系統", "台幣換匯系統"],
+        key="selected_system",
+    )
+    if st.button("🚪 登出系統"):
+        st.session_state["password_correct"] = False
+        st.rerun()
+
+# ==================== GAS Web App URL 設定 ====================
+# * 11021110 換Google sheet：股號對照表是另一份試算表；更換時更新試算表 ID、工作表 gid 與讀取範圍。
+STOCK_REFERENCE_SHEET_URL = st.secrets.get(
+    "STOCK_REFERENCE_SHEET_URL",
+    "請在 Streamlit secrets 設定 STOCK_REFERENCE_SHEET_URL",
+)
+# * 1變更：設定為提供的編輯連結，讀取時轉成 CSV 匯出連結。
+STOCK_REFERENCE_CSV_URL = STOCK_REFERENCE_SHEET_URL.replace(
+    "/edit?gid=0#gid=0&range=B:E",
+    "/export?format=csv&gid=0&range=B:E",
+)
+
+
+# * 2變更：對照資料快取縮短為 5 分鐘，查無股號時可手動清除快取並重新載入。
+@st.cache_data(ttl=300, show_spinner=False)
+def load_stock_categories():
+    response = requests.get(STOCK_REFERENCE_CSV_URL, timeout=15)
+    response.raise_for_status()
+    if "text/html" in response.headers.get("Content-Type", "").lower():
+        raise ValueError("試算表回傳登入頁面，請將來源試算表設為知道連結的使用者可檢視。")
+    response.encoding = "utf-8-sig"
+
+    if response.text.lstrip().lower().startswith(("<!doctype html", "<html")):
+        raise ValueError("試算表回傳登入頁面，請將來源試算表設為知道連結的使用者可檢視。")
+
+    reference = pd.read_csv(
+        StringIO(response.text),
+        header=None,
+        dtype=str,
+        keep_default_na=False,
+    )
+    # * 11021110 換Google sheet：此處預設讀取 B:E，依序是股號、股名、類股、種類；
+    #   若新表欄位位置或順序不同，需同步調整範圍及下方欄位索引。
+    if reference.shape[1] >= 5:
+        reference = reference.iloc[:, 1:5]
+    elif reference.shape[1] != 4:
+        raise ValueError("試算表 B:E 必須依序包含股號、股名、類股、種類。")
+
+    if not reference.empty and str(reference.iloc[0, 0]).strip() in {
+        "股號", "股票代號", "股票代碼", "證券代號", "代號"
+    }:
+        reference = reference.iloc[1:]
+
+    categories = {}
+    for _, row in reference.iterrows():
+        stock_id = str(row.iloc[0]).strip()
+        if stock_id.endswith(".0") and stock_id[:-2].isdigit():
+            stock_id = stock_id[:-2]
+        if stock_id:
+            categories[stock_id] = (
+                str(row.iloc[2]).strip(),
+                str(row.iloc[3]).strip(),
+            )
+    return categories
+
+
+def normalize_sheet_data(data):
+    if isinstance(data, dict):
+        for key in ("data", "values", "rows"):
+            if isinstance(data.get(key), list):
+                data = data[key]
+                break
+
+    if data is None or (isinstance(data, list) and not data):
+        return pd.DataFrame(columns=SHEET_COLUMNS)
+
+    if isinstance(data, dict):
+        try:
+            df = pd.DataFrame(data)
+        except ValueError:
+            df = pd.DataFrame([data])
+        if not set(SHEET_COLUMNS).intersection(str(column) for column in df.columns):
+            values = [list(data)]
+            values.extend(df.astype(object).values.tolist())
+            df = pd.DataFrame(values)
+    elif isinstance(data, list):
+        if data and all(isinstance(row, dict) for row in data):
+            response_columns = list(data[0])
+            known_columns = set(SHEET_COLUMNS)
+            if not known_columns.intersection(response_columns):
+                # Some GAS implementations use the first sheet row as JSON keys,
+                # so restore that row and map each returned row to known fields.
+                values = [response_columns]
+                values.extend([[row.get(column) for column in response_columns] for row in data])
+                df = pd.DataFrame(values)
+            else:
+                df = pd.DataFrame(data)
+        else:
+            df = pd.DataFrame(data)
+    else:
+        raise ValueError("Google Apps Script 回傳的資料格式不是表格資料。")
+
+    if df.empty:
+        return pd.DataFrame(columns=SHEET_COLUMNS)
+
+    if all(str(column).isdigit() for column in df.columns):
+        columns = SHEET_COLUMNS + [
+            f"其他欄位_{index + 1}"
+            for index in range(max(0, len(df.columns) - len(SHEET_COLUMNS)))
+        ]
+        df.columns = columns[:len(df.columns)]
+    else:
+        df.columns = [str(column).strip() for column in df.columns]
+
+    return df
+
+
+def parse_trade_dates(values):
+    def parse_date(value):
+        if pd.isna(value):
+            return pd.NaT
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if not pd.notna(value):
+                return pd.NaT
+            numeric_value = int(value)
+            value_text = str(numeric_value)
+            if len(value_text) == 8:
+                return pd.to_datetime(value_text, format="%Y%m%d", errors="coerce")
+            if 1 <= numeric_value <= 100000:
+                return pd.Timestamp("1899-12-30") + pd.to_timedelta(numeric_value, unit="D")
+            return pd.NaT
+
+        value_text = str(value).strip()
+        if not value_text:
+            return pd.NaT
+        if value_text.endswith(".0") and value_text[:-2].isdigit():
+            value_text = value_text[:-2]
+        if len(value_text) == 8 and value_text.isdigit():
+            return pd.to_datetime(value_text, format="%Y%m%d", errors="coerce")
+        if value_text.isdigit():
+            serial = int(value_text)
+            if 1 <= serial <= 100000:
+                return pd.Timestamp("1899-12-30") + pd.to_timedelta(serial, unit="D")
+            return pd.NaT
+        return pd.to_datetime(value_text, errors="coerce")
+
+    return values.map(parse_date)
+
+
+def prepare_monthly_trade_data(data):
+    chart_data = data.copy()
+    required_columns = [
+        "股號", "股名", "實際買股日期", "實際買股金額", "實際買股數量",
+        "實際買股花費金額", "實際賣股日期", "實際賣股金額", "實際賣股數量",
+        "實際賣股所得金額",
+    ]
+    for column in required_columns:
+        if column not in chart_data.columns:
+            chart_data[column] = pd.NA
+
+    for column in (
+        "實際買股金額",
+        "實際買股數量",
+        "實際買股花費金額",
+        "實際賣股金額",
+        "實際賣股數量",
+        "實際賣股所得金額",
+    ):
+        chart_data[column] = pd.to_numeric(
+            chart_data[column].astype(str).str.replace(",", "", regex=False),
+            errors="coerce",
+        )
+
+    for price_column, quantity_column, total_column in (
+        ("實際買股金額", "實際買股數量", "實際買股花費金額"),
+        ("實際賣股金額", "實際賣股數量", "實際賣股所得金額"),
+    ):
+        calculated_total = chart_data[price_column] * chart_data[quantity_column]
+        missing_total = chart_data[total_column].isna() | chart_data[total_column].eq(0)
+        has_trade_data = chart_data[price_column].gt(0) & chart_data[quantity_column].gt(0)
+        chart_data.loc[missing_total & has_trade_data, total_column] = calculated_total
+        chart_data[total_column] = chart_data[total_column].fillna(0)
+
+    chart_data["_買入日期"] = parse_trade_dates(chart_data["實際買股日期"])
+    chart_data["_賣出日期"] = parse_trade_dates(chart_data["實際賣股日期"])
+    chart_data["_買入月份"] = chart_data["_買入日期"].dt.strftime("%Y-%m")
+    chart_data["_賣出月份"] = chart_data["_賣出日期"].dt.strftime("%Y-%m")
+
+    buy_monthly = (
+        chart_data.dropna(subset=["_買入月份"])
+        .groupby("_買入月份")["實際買股花費金額"]
+        .sum()
+        .rename("實際買入金額")
+    )
+    sell_monthly = (
+        chart_data.dropna(subset=["_賣出月份"])
+        .groupby("_賣出月份")["實際賣股所得金額"]
+        .sum()
+        .rename("實際賣出金額")
+    )
+    monthly = pd.concat([buy_monthly, sell_monthly], axis=1).fillna(0).sort_index()
+    return chart_data, monthly
+
+
+def load_data():
+    try:
+        response = requests.get(GAS_WEB_APP_URL, timeout=15)
+        if response.status_code == 200:
+            return normalize_sheet_data(response.json())
+        else:
+            st.error(f"無法讀取 Google Sheet 資料，狀態碼: {response.status_code}")
+            return pd.DataFrame()
+    except (requests.RequestException, ValueError) as e:
+        st.error(f"連線至 Google Apps Script 失敗: {e}")
+        return pd.DataFrame()
+
+def save_to_google_sheet(
+    row_data, row_number=None, expected_stock_id=None, expected_status=None
+):
+    payload = {"headers": SHEET_COLUMNS, "row": row_data}
+    if row_number is not None:
+        payload.update({
+            "action": "update",
+            "rowNumber": row_number,
+            "expectedStockId": expected_stock_id,
+            "expectedStatus": expected_status,
+        })
+
+    try:
+        response = requests.post(
+            GAS_WEB_APP_URL,
+            json=payload,
+            timeout=15,
+        )
+        if response.status_code == 200 and response.json().get("result") == "success":
+            return True
+        else:
+            st.error(f"寫入失敗: {response.text}")
+            return False
+    except (requests.RequestException, ValueError) as e:
+        st.error(f"寫入 Google Sheet 發生錯誤: {e}")
+        return False
+
+# ==================== Telegram 訊息發送 ====================
+def send_telegram_msg(message):
+    token = st.secrets.get("TELEGRAM_BOT_TOKEN")
+    chat_id = st.secrets.get("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return False, "請先在 Streamlit secrets 設定 TELEGRAM_BOT_TOKEN 與 TELEGRAM_CHAT_ID。"
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    try:
+        response = requests.post(
+            url,
+            json={"chat_id": chat_id, "text": message},
+            timeout=15,
+        )
+        result = response.json()
+        if response.ok and result.get("ok"):
+            return True, "Telegram 測試訊息已成功送出。"
+        description = result.get("description", f"Telegram 回應狀態碼 {response.status_code}")
+        if description == "Bad Request: chat not found":
+            description = (
+                "Telegram 找不到這個 chat。若為私人對話，請先開啟機器人並傳送 /start；"
+                "若為群組，請先將機器人加入群組並在群組傳送一則訊息，"
+                "再確認 TELEGRAM_CHAT_ID 是該對話的正確 ID。"
+            )
+        elif description == "Forbidden: the bot can't send messages to the bot":
+            description = (
+                "目前的 TELEGRAM_CHAT_ID 指向另一個 Telegram 機器人；Telegram 不允許機器人互相傳訊。"
+                "請用自己的個人 Telegram 帳號開啟 AI 股票機器人、傳送 /start，"
+                "並將個人對話的 chat.id 設為 TELEGRAM_CHAT_ID。"
+            )
+        return False, description
+    except (requests.RequestException, ValueError) as e:
+        return False, f"Telegram 發送失敗：{e}"
+
+
+def load_fx_data(refresh_rates=False):
+    response = requests.get(
+        GAS_WEB_APP_URL,
+        params={
+            "action": "fxData",
+            "refreshRates": "true" if refresh_rates else "false",
+        },
+        timeout=15,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if isinstance(data, dict) and data.get("result") == "error":
+        raise ValueError(data.get("message", "Google Apps Script 無法讀取匯率資料。"))
+    if (
+        not isinstance(data, dict)
+        or not isinstance(data.get("targets"), list)
+        or not isinstance(data.get("trades"), list)
+        or not isinstance(data.get("rates"), dict)
+        or not isinstance(data.get("rateDate"), str)
+        or not isinstance(data.get("updatedAt"), str)
+    ):
+        raise ValueError("Google Apps Script 回傳的匯兌資料格式錯誤，請確認已部署最新版程式。")
+    return data
+
+
+def save_fx_data(payload):
+    response = requests.post(GAS_WEB_APP_URL, json=payload, timeout=15)
+    response.raise_for_status()
+    result = response.json()
+    if result.get("result") != "success":
+        raise ValueError(result.get("message", "Google Apps Script 未能儲存匯兌資料。"))
+
+
+def render_fx_system():
+    st.title("💱 台幣換匯系統")
+    st.caption(
+        "資料來源：ExchangeRate-API；顯示每日更新的參考匯率，"
+        "不是前一日官方收盤、銀行牌告或實際成交匯率。"
+    )
+    st.caption(
+        "API Key 僅需設定在 Apps Script 指令碼屬性，不需放入 Streamlit secrets。"
+    )
+    refresh_rates = st.button("🔄 立即更新匯率")
+
+    try:
+        fx_data = load_fx_data(refresh_rates=refresh_rates)
+    except (requests.RequestException, ValueError) as error:
+        st.error(f"無法讀取匯率目標與換匯紀錄：{error}")
+        fx_data = {"targets": [], "trades": [], "rates": {}, "rateDate": "", "updatedAt": ""}
+
+    targets = pd.DataFrame(fx_data["targets"])
+    trades = pd.DataFrame(fx_data["trades"])
+    display_targets = localize_fx_records(targets)
+    display_trades = localize_fx_records(trades)
+    target_by_code = {}
+    if not targets.empty and {"幣別代碼", "期望匯率（台幣／外幣）"}.issubset(targets.columns):
+        target_by_code = {
+            str(row["幣別代碼"]).strip().upper(): row
+            for _, row in targets.iterrows()
+        }
+
+    st.subheader("設定匯率目標")
+    st.caption(
+        "背景 Telegram 通知每 5 分鐘檢查一次；首次更新 Apps Script 後，"
+        "請執行一次 installPriceMonitor() 並授權排程。"
+    )
+
+    if fx_data["rates"]:
+        currency_rates = fx_data["rates"]
+        currency_codes = sorted(code for code in currency_rates if code != "TWD")
+        if not currency_codes:
+            st.error("ExchangeRate-API 沒有回傳可選擇的外幣匯率。")
+            return
+        selected_code = st.selectbox(
+            "選擇幣別",
+            currency_codes,
+            index=currency_codes.index("USD") if "USD" in currency_codes else 0,
+            format_func=fx_currency_label,
+            key="fx_selected_currency",
+        )
+        currency_name = fx_currency_name(selected_code)
+        currency_label = fx_currency_label(selected_code)
+        foreign_per_twd = currency_rates[selected_code]
+        twd_per_foreign = 1 / foreign_per_twd
+        rate_date = fx_data["rateDate"]
+        current_target = target_by_code.get(selected_code)
+        default_target = 30.0 if selected_code == "USD" else 0.0
+        saved_target_rate = None
+        if current_target is not None:
+            try:
+                saved_target_rate = float(current_target["期望匯率（台幣／外幣）"])
+                if saved_target_rate <= 0:
+                    raise ValueError("期望匯率必須大於 0。")
+                default_target = saved_target_rate
+            except (TypeError, ValueError):
+                st.warning(f"{currency_label} 的已儲存期望匯率無效，請重新設定。")
+
+        target_rate = st.number_input(
+            f"1 {currency_label} 對台幣期望匯率",
+            min_value=0.0001,
+            value=max(default_target, 0.0001),
+            step=0.1,
+            format="%.4f",
+            key=f"fx_target_rate_{selected_code}",
+        )
+        if st.button("儲存匯率目標"):
+            try:
+                save_fx_data({
+                    "action": "saveFxTarget",
+                    "currencyCode": selected_code,
+                    "currencyName": currency_name,
+                    "targetRate": target_rate,
+                })
+            except (requests.RequestException, ValueError) as error:
+                st.error(f"儲存匯率目標失敗：{error}")
+            else:
+                st.success(f"已儲存 {currency_label} 目標匯率：{target_rate:.4f} TWD。")
+                st.rerun()
+
+        st.subheader(f"{currency_label} 匯率")
+        rate_col1, rate_col2 = st.columns(2)
+        rate_col1.metric(f"1 {currency_label} 對台幣", f"NT$ {twd_per_foreign:,.6f}")
+        rate_col2.metric(
+            f"1 台幣對 {currency_label}",
+            f"{foreign_per_twd:,.6f} {currency_label}",
+        )
+        st.caption(
+            "資料來源：[ExchangeRate-API](https://www.exchangerate-api.com/)。"
+            f"匯率更新日期：{rate_date}；API 更新時間：{fx_data['updatedAt']}。"
+        )
+
+        if current_target is not None and saved_target_rate is not None:
+            if twd_per_foreign <= saved_target_rate:
+                st.success(
+                    f"已達到期望值（目前 {twd_per_foreign:.4f} ≤ 目標 {saved_target_rate:.4f}），"
+                    "排程啟用後將透過 Telegram 通知。"
+                )
+            else:
+                st.info(
+                    f"尚未達標；目前 {twd_per_foreign:.4f}，"
+                    f"目標 {saved_target_rate:.4f} TWD。"
+                )
+
+        st.markdown("#### 新增本次換匯紀錄")
+        st.caption(
+            "紀錄會保存換匯日期及 API 匯率更新日期；參考匯率不代表實際成交匯率。"
+        )
+        foreign_amount = st.number_input(
+            f"換匯金額（{currency_label}，可留 0）",
+            min_value=0.0,
+            step=100.0,
+            key=f"fx_trade_amount_{selected_code}",
+        )
+        if st.button("💱 換匯並記錄當天匯率"):
+            exchange_date = datetime.now(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d")
+            try:
+                save_fx_data({
+                    "action": "recordFxTrade",
+                    "exchangeDate": exchange_date,
+                    "currencyCode": selected_code,
+                    "currencyName": currency_name,
+                    "sellRate": twd_per_foreign,
+                    "rateDate": rate_date,
+                    "foreignAmount": foreign_amount,
+                    "twdAmount": foreign_amount * twd_per_foreign,
+                })
+            except (requests.RequestException, ValueError) as error:
+                st.error(f"新增換匯紀錄失敗：{error}")
+            else:
+                st.success(f"已記錄 {exchange_date} 的 {currency_label} 匯率。")
+                st.rerun()
+    else:
+        st.info("目前無法取得 API 匯率，暫時無法設定目標或記錄換匯。")
+
+    st.markdown("---")
+    st.subheader("已設定匯率目標")
+    if targets.empty:
+        st.info("尚未設定匯率目標。")
+    else:
+        st.dataframe(display_targets, use_container_width=True, hide_index=True)
+        targets_csv = display_targets.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "下載匯率目標 CSV",
+            targets_csv,
+            file_name="台幣換匯目標.csv",
+            mime="text/csv",
+        )
+
+    st.subheader("換匯紀錄")
+    if trades.empty:
+        st.info("尚無換匯紀錄。")
+    else:
+        st.dataframe(display_trades, use_container_width=True, hide_index=True)
+        trades_csv = display_trades.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "下載換匯紀錄 CSV",
+            trades_csv,
+            file_name="台幣換匯紀錄.csv",
+            mime="text/csv",
+        )
+
+
+if selected_system == "台幣換匯系統":
+    render_fx_system()
+    st.stop()
+
+st.title("📈 股票買賣記錄與即時監控系統")
+version_number = "20261021. CS. V1.0 最終版"
+st.write(f"📊 系統版本: {version_number}")
+
+# ==================== Yahoo 股市價格抓取 ====================
+df = load_data()
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_stock_info(stock_id):
+    stock_id = str(stock_id).strip()
+    if stock_id.endswith(".0") and stock_id[:-2].isdigit():
+        stock_id = stock_id[:-2]
+    english_name = ""
+    price = None
+
+    for suffix in (".TW", ".TWO"):
+        ticker = yf.Ticker(f"{stock_id}{suffix}")
+        try:
+            hist = ticker.history(period="1d")
+        except Exception:
+            continue
+        try:
+            info = ticker.info
+        except Exception:
+            info = {}
+
+        english_name = info.get("shortName") or info.get("longName") or english_name
+        if not hist.empty and price is None:
+            price = float(hist["Close"].iloc[-1])
+
+    stock_names, _ = load_taiwan_stock_names()
+    chinese_name, listed_english_name = stock_names.get(stock_id, ("", ""))
+    english_name = english_name or listed_english_name
+    chinese_name = chinese_name or f"台股{stock_id}"
+    return chinese_name, english_name or f"Taiwan stock {stock_id}", price
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_taiwan_stock_names():
+    sources = (
+        (
+            "https://openapi.twse.com.tw/v1/opendata/t187ap03_L",
+            "公司代號",
+            "公司簡稱",
+            "英文簡稱",
+        ),
+        (
+            "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O",
+            "SecuritiesCompanyCode",
+            "CompanyAbbreviation",
+            "Symbol",
+        ),
+    )
+    names = {}
+    errors = []
+    for url, code_key, chinese_key, english_key in sources:
+        try:
+            response = requests.get(url, timeout=15)
+            response.raise_for_status()
+            companies = response.json()
+            for company in companies:
+                code = str(company.get(code_key, "")).strip()
+                if code:
+                    names[code] = (
+                        str(company.get(chinese_key, "")).strip(),
+                        str(company.get(english_key, "")).strip(),
+                    )
+        except (requests.RequestException, ValueError) as e:
+            errors.append(f"{url}: {e}")
+    return names, errors
+
+# ==================== 分頁頁籤 ====================
+tab1, tab2, tab3 = st.tabs(["📝 新增買賣紀錄", "📊 買賣紀錄表與觸發點監控", "📈 統計圖表分析"])
+
+# -------------------- TAB 1: 輸入表單 --------------------
+with tab1:
+    st.subheader("新增買賣交易數據")
+
+    open_trades = pd.DataFrame()
+    if not df.empty and {"交易狀態", "_sheet_row"}.issubset(df.columns):
+        open_trades = df[
+            df["交易狀態"].astype(str).str.strip().eq("進行中")
+            & pd.to_numeric(df["_sheet_row"], errors="coerce").notna()
+        ].copy()
+
+    trade_options = [0] + (
+        pd.to_numeric(open_trades["_sheet_row"], errors="raise").astype(int).tolist()
+        if not open_trades.empty
+        else []
+    )
+    pending_trade_row = st.session_state.pop("pending_open_trade", None)
+    if pending_trade_row in trade_options:
+        st.session_state["selected_open_trade"] = pending_trade_row
+    if st.session_state.get("selected_open_trade", 0) not in trade_options:
+        st.session_state["selected_open_trade"] = 0
+    if "_loaded_open_trade" not in st.session_state:
+        st.session_state["_loaded_open_trade"] = None
+
+    def trade_option_label(row_number):
+        if row_number == 0:
+            return "新增空白交易"
+        record = open_trades.loc[
+            pd.to_numeric(open_trades["_sheet_row"], errors="coerce").eq(row_number)
+        ].iloc[0]
+        stock_id_label = str(record.get("股號", "")).strip()
+        stock_name_label = str(record.get("股名", "")).strip()
+        return f"{stock_id_label} {stock_name_label}（進行中，第 {row_number} 列）".strip()
+
+    selected_trade_row = st.selectbox(
+        "載入進行中交易",
+        options=trade_options,
+        format_func=trade_option_label,
+        key="selected_open_trade",
+    )
+
+    def form_number(value, default=0):
+        parsed = pd.to_numeric(value, errors="coerce")
+        return default if pd.isna(parsed) else float(parsed)
+
+    def form_text(value):
+        return "" if pd.isna(value) else str(value)
+
+    def form_date(value, default_today=True):
+        if pd.isna(value) or str(value).strip() == "":
+            return datetime.now().strftime("%Y%m%d") if default_today else ""
+        parsed = parse_trade_dates(pd.Series([value])).iloc[0]
+        return parsed.strftime("%Y%m%d") if pd.notna(parsed) else str(value)
+
+    if selected_trade_row != st.session_state["_loaded_open_trade"]:
+        if selected_trade_row == 0:
+            st.session_state.update({
+                "form_stock_id": "2330",
+                "form_p_buy_price": 0.0,
+                "form_p_buy_qty": 0,
+                "form_r_buy_date": datetime.now().strftime("%Y%m%d"),
+                "form_r_buy_price": 0.0,
+                "form_r_buy_qty": 0,
+                "form_r_buy_fee": 0,
+                "form_p_sell_price": 0.0,
+                "form_p_sell_qty": 0,
+                "form_r_sell_date": datetime.now().strftime("%Y%m%d"),
+                "form_r_sell_price": 0.0,
+                "form_r_sell_qty": 0,
+                "form_r_sell_fee": 0,
+            })
+        else:
+            selected_record = open_trades.loc[
+                pd.to_numeric(open_trades["_sheet_row"], errors="coerce").eq(
+                    selected_trade_row
+                )
+            ].iloc[0]
+            st.session_state.update({
+                "form_stock_id": str(selected_record.get("股號", "")).strip(),
+                "form_p_buy_price": form_number(selected_record.get("預計買股金額")),
+                "form_p_buy_qty": int(form_number(selected_record.get("預計買股數量"))),
+                "form_r_buy_date": form_date(
+                    selected_record.get("實際買股日期"), default_today=False
+                ),
+                "form_r_buy_price": form_number(selected_record.get("實際買股金額")),
+                "form_r_buy_qty": int(form_number(selected_record.get("實際買股數量"))),
+                "form_r_buy_fee": int(form_number(selected_record.get("買股手續費"))),
+                "form_p_sell_price": form_number(selected_record.get("預計賣股金額")),
+                "form_p_sell_qty": int(form_number(selected_record.get("預計賣股數量"))),
+                "form_r_sell_date": form_date(
+                    selected_record.get("實際賣股日期"), default_today=False
+                ),
+                "form_r_sell_price": form_number(selected_record.get("實際賣股金額")),
+                "form_r_sell_qty": int(form_number(selected_record.get("實際賣股數量"))),
+                "form_r_sell_fee": int(form_number(selected_record.get("賣股手續費"))),
+            })
+        st.session_state["_loaded_open_trade"] = selected_trade_row
+
+    if not df.empty and "_sheet_row" not in df.columns:
+        st.info("進行中交易載入與更新功能需先部署最新版 Google Apps Script。")
+
+    col_basic1, col_basic2, col_basic3, col_basic4, col_basic5 = st.columns(5)
+    with col_basic1:
+        stock_id = st.text_input("股號 (例如: 2330)", key="form_stock_id")
+    
+    category = ""
+    sub_category = ""
+    stock_reference_error = None
+    stock_category_found = False
+    if stock_id:
+        try:
+            stock_categories = load_stock_categories()
+        except (
+            requests.RequestException,
+            ValueError,
+            pd.errors.ParserError,
+            pd.errors.EmptyDataError,
+        ) as error:
+            stock_reference_error = error
+            st.warning(f"無法讀取股號對照資料：{error}")
+        else:
+            lookup_stock_id = str(stock_id).strip()
+            if lookup_stock_id.endswith(".0") and lookup_stock_id[:-2].isdigit():
+                lookup_stock_id = lookup_stock_id[:-2]
+            stock_category_found = lookup_stock_id in stock_categories
+            category, sub_category = stock_categories.get(lookup_stock_id, ("", ""))
+            if not stock_category_found:
+                st.info(f"對照資料中查無股號「{lookup_stock_id}」的類股與種類。")
+                if st.button("重新載入股號對照資料"):
+                    load_stock_categories.clear()
+                    st.rerun()
+
+    stock_chinese_name, stock_english_name, current_price = (
+        get_stock_info(stock_id) if stock_id else ("-", "-", None)
+    )
+    if stock_id:
+        _, stock_name_errors = load_taiwan_stock_names()
+        if stock_name_errors:
+            st.warning("無法連線至部分臺灣交易所公司資料，中文股名可能暫時以股號代替。")
+    with col_basic2:
+        st.text_input("中文股名", value=stock_chinese_name, disabled=True)
+        st.text_input("英文股名", value=stock_english_name, disabled=True)
+    with col_basic3:
+        st.text_input("類股", value=category, disabled=True)
+    with col_basic4:
+        st.text_input("種類", value=sub_category, disabled=True)
+    with col_basic5:
+        st.text_input(
+            "當天收盤價／現價",
+            value=f"{current_price:,.2f}" if current_price is not None else "暫無報價",
+            disabled=True,
+        )
+
+    st.markdown("---")
+    
+    c1, c2 = st.columns(2)
+    
+    with c1:
+        st.markdown("### 一、預計買股")
+        p_buy_price = st.number_input("預計買股金額", step=0.5, key="form_p_buy_price")
+        p_buy_qty = st.number_input("預計買股數量", step=1000, key="form_p_buy_qty")
+        p_buy_total = p_buy_price * p_buy_qty
+        st.info(f"預計買股花費金額：{p_buy_total:,.0f}")
+
+        st.markdown("### 二、實際買股")
+        r_buy_date = st.text_input("實際買股日期 (YYYYMMDD)", key="form_r_buy_date")
+        r_buy_price = st.number_input("實際買股金額", step=0.5, key="form_r_buy_price")
+        r_buy_qty = st.number_input("實際買股數量", step=1000, key="form_r_buy_qty")
+        r_buy_fee = st.number_input("買股手續費", step=10, key="form_r_buy_fee")
+        r_buy_total = r_buy_price * r_buy_qty
+        st.success(f"實際買股花費金額：{r_buy_total:,.0f}")
+
+    with c2:
+        st.markdown("### 三、預計賣股")
+        p_sell_price = st.number_input("預計賣股金額", step=0.5, key="form_p_sell_price")
+        p_sell_qty = st.number_input("預計賣股數量", step=1000, key="form_p_sell_qty")
+        p_sell_total = p_sell_price * p_sell_qty
+        st.info(f"預計賣股所得金額：{p_sell_total:,.0f}")
+
+        st.markdown("### 四、實際賣股")
+        r_sell_date = st.text_input("實際賣股日期 (YYYYMMDD)", key="form_r_sell_date")
+        r_sell_price = st.number_input("實際賣股金額", step=0.5, key="form_r_sell_price")
+        r_sell_qty = st.number_input("實際賣股數量", step=1000, key="form_r_sell_qty")
+        r_sell_fee = st.number_input("賣股手續費", step=10, key="form_r_sell_fee")
+        r_sell_total = r_sell_price * r_sell_qty
+        st.success(f"實際賣股所得金額：{r_sell_total:,.0f}")
+
+    # 狀態判斷
+    status = "結案" if (r_buy_qty == r_sell_qty and r_buy_qty > 0) else "進行中"
+    st.write(f"**當前交易狀態：** `{status}`")
+
+    if st.button(
+        "💾 儲存並寫入 Google Sheet",
+        disabled=bool(stock_id and (stock_reference_error or not stock_category_found)),
+    ):
+        new_row = [
+            stock_id, stock_chinese_name, category, sub_category, status,
+            p_buy_price, p_buy_qty, p_buy_total,
+            r_buy_date, r_buy_price, r_buy_qty, r_buy_total, r_buy_fee,
+            p_sell_price, p_sell_qty, p_sell_total,
+            r_sell_date, r_sell_price, r_sell_qty, r_sell_total, r_sell_fee,
+            stock_english_name, current_price if current_price is not None else "",
+        ]
+        if save_to_google_sheet(
+            new_row,
+            row_number=selected_trade_row if selected_trade_row else None,
+            expected_stock_id=(
+                str(
+                    open_trades.loc[
+                        pd.to_numeric(open_trades["_sheet_row"], errors="coerce").eq(
+                            selected_trade_row
+                        ),
+                        "股號",
+                    ].iloc[0]
+                ).strip()
+                if selected_trade_row
+                else None
+            ),
+            expected_status="進行中" if selected_trade_row else None,
+        ):
+            st.success(
+                "已更新 Google Sheet 原交易紀錄！"
+                if selected_trade_row
+                else "成功寫入 Google Sheet！"
+            )
+            st.rerun()
+
+# -------------------- TAB 2: 資料展示與價格觸發Telegram通知 --------------------
+with tab2:
+    st.subheader("📋 股票買賣記錄表")
+    if not df.empty:
+        status_filter = st.selectbox(
+            "依交易狀態篩選",
+            ["全部", "進行中", "結案"],
+            key="records_status_filter",
+        )
+        displayed_df = df
+        if status_filter != "全部" and "交易狀態" in df.columns:
+            displayed_df = df[
+                df["交易狀態"].astype(str).str.strip().eq(status_filter)
+            ]
+        st.dataframe(
+            displayed_df.drop(columns=["_sheet_row"], errors="ignore"),
+            use_container_width=True,
+        )
+        if not open_trades.empty:
+            selected_open_trade = st.selectbox(
+                "選擇要帶入新增交易表單的進行中紀錄",
+                options=trade_options[1:],
+                format_func=trade_option_label,
+                key="table_open_trade",
+            )
+            if st.button("帶入新增買賣交易數據"):
+                st.session_state["pending_open_trade"] = selected_open_trade
+                st.rerun()
+        elif "交易狀態" in df.columns and df["交易狀態"].astype(str).str.strip().eq("進行中").any():
+            st.info("進行中交易載入功能需先部署最新版 Google Apps Script。")
+    else:
+        st.warning("目前尚無歷史交易資料。")
+
+    st.markdown("---")
+    st.subheader("🔔 Telegram 通知測試與即時觸發")
+    if st.button("📨 傳送 Telegram 測試訊息"):
+        sent, result = send_telegram_msg("✅ 股票買賣記錄系統 Telegram 測試訊息")
+        if sent:
+            st.success(result)
+        else:
+            st.error(result)
+
+    if st.button("⚡ 檢查 Yahoo 股市價格並觸發通知") and not df.empty:
+        for _, row in df.iterrows():
+            s_id = str(row.get("股號", "")).strip()
+            if s_id.endswith(".0") and s_id[:-2].isdigit():
+                s_id = s_id[:-2]
+            s_chinese_name, s_english_name, market_p = get_stock_info(s_id)
+            stock_label = f"{s_chinese_name} / {s_english_name}"
+            p_buy_p = pd.to_numeric(row.get("預計買股金額", 0), errors="coerce")
+            p_sell_p = pd.to_numeric(row.get("預計賣股金額", 0), errors="coerce")
+            actual_buy_qty = pd.to_numeric(row.get("實際買股數量", 0), errors="coerce")
+            p_buy_p = 0 if pd.isna(p_buy_p) else p_buy_p
+            p_sell_p = 0 if pd.isna(p_sell_p) else p_sell_p
+            actual_buy_qty = 0 if pd.isna(actual_buy_qty) else actual_buy_qty
+
+            if market_p is None:
+                st.warning(f"無法取得 {stock_label}（{s_id}）的 Yahoo 股價。")
+                continue
+
+            if actual_buy_qty <= 0 and p_buy_p > 0 and market_p <= p_buy_p:
+                msg = f"🟢 【買入警報】{stock_label}({s_id})\n當前股價: {market_p}\n已達到預計買入價: {p_buy_p}"
+                sent, result = send_telegram_msg(msg)
+                if sent:
+                    st.success(msg)
+                else:
+                    st.error(result)
+
+            if p_sell_p > 0 and market_p >= p_sell_p:
+                msg = f"🔴 【賣出警報】{stock_label}({s_id})\n當前股價: {market_p}\n已達到預計賣出價: {p_sell_p}"
+                sent, result = send_telegram_msg(msg)
+                if sent:
+                    st.success(msg)
+                else:
+                    st.error(result)
+
+# -------------------- TAB 3: 統計圖表分析 --------------------
+with tab3:
+    st.subheader("📊 統計分析圖表")
+    if not df.empty:
+        df_chart, monthly = prepare_monthly_trade_data(df)
+
+        if monthly.empty or not monthly.to_numpy().any():
+            st.info(
+                "目前資料中找不到同時具備有效日期與實際交易金額的買賣紀錄。"
+                "日期可使用 YYYYMMDD、YYYY-MM-DD 或 Google 試算表日期格式；"
+                "金額可由實際成交價 × 股數計算。請檢查下方資料對照。"
+            )
+            diagnostic_columns = [
+                column for column in (
+                    "股號", "股名", "實際買股日期", "實際買股金額",
+                    "實際買股數量", "實際買股花費金額", "實際賣股日期",
+                    "實際賣股金額", "實際賣股數量", "實際賣股所得金額",
+                ) if column in df_chart.columns
+            ]
+            st.dataframe(df_chart[diagnostic_columns], use_container_width=True)
+        else:
+            monthly["當月現金流"] = monthly["實際賣出金額"] - monthly["實際買入金額"]
+            st.markdown("### 每月實際買賣金額")
+            chart_values = monthly[
+                ["實際買入金額", "實際賣出金額", "當月現金流"]
+            ].to_numpy(dtype=float)
+            data_min = min(0.0, float(chart_values.min()))
+            data_max = max(0.0, float(chart_values.max()))
+            padding = max((data_max - data_min) * 0.1, 1.0)
+            default_y_min = data_min - padding
+            default_y_max = data_max + padding
+            custom_y_range = st.checkbox("自訂圖表 Y 軸上下限")
+            y_range = None
+            if custom_y_range:
+                y_min_col, y_max_col = st.columns(2)
+                with y_min_col:
+                    y_min = st.number_input(
+                        "Y 軸下限",
+                        value=default_y_min,
+                        step=max(padding, 1.0),
+                        format="%.2f",
+                    )
+                with y_max_col:
+                    y_max = st.number_input(
+                        "Y 軸上限",
+                        value=default_y_max,
+                        step=max(padding, 1.0),
+                        format="%.2f",
+                    )
+                if y_min >= y_max:
+                    st.error("Y 軸下限必須小於上限。")
+                else:
+                    y_range = [y_min, y_max]
+
+            if not custom_y_range or y_range is not None:
+                monthly_labels = monthly.index.astype(str).tolist()
+                fig1 = go.Figure()
+                fig1.add_trace(go.Bar(x=monthly_labels, y=monthly["實際買入金額"], name="實際買入金額"))
+                fig1.add_trace(go.Bar(
+                    x=monthly_labels,
+                    y=monthly["實際賣出金額"],
+                    name="實際賣出金額",
+                    marker_color="green",
+                ))
+                fig1.add_trace(go.Scatter(
+                    x=monthly_labels,
+                    y=monthly["當月現金流"],
+                    mode="lines+markers",
+                    name="當月現金流（賣出 - 買入，非已實現損益）",
+                    marker={"size": 12},
+                ))
+                fig1.update_layout(
+                    title="每月實際買賣統計",
+                    xaxis_title="月份",
+                    yaxis_title="金額",
+                    barmode="group",
+                    xaxis={"type": "category"},
+                    yaxis={"range": y_range},
+                )
+                st.plotly_chart(fig1, use_container_width=True)
+
+                stock_options = df_chart[["股號", "股名"]].dropna(subset=["股號"]).drop_duplicates()
+                if not stock_options.empty:
+                    stock_options["_顯示名稱"] = (
+                        stock_options["股號"].astype(str)
+                        + " "
+                        + stock_options["股名"].fillna("").astype(str)
+                    ).str.strip()
+                    selected_stock = st.selectbox("選擇個股", stock_options["_顯示名稱"].tolist())
+                    selected_id = stock_options.loc[
+                        stock_options["_顯示名稱"] == selected_stock, "股號"
+                    ].iloc[0]
+                    df_single = df_chart[df_chart["股號"].astype(str) == str(selected_id)]
+                    single_buy = (
+                        df_single.dropna(subset=["_買入月份"])
+                        .groupby("_買入月份")["實際買股花費金額"]
+                        .sum()
+                        .rename("實際買入金額")
+                    )
+                    single_sell = (
+                        df_single.dropna(subset=["_賣出月份"])
+                        .groupby("_賣出月份")["實際賣股所得金額"]
+                        .sum()
+                        .rename("實際賣出金額")
+                    )
+                    single_monthly = pd.concat([single_buy, single_sell], axis=1).fillna(0).sort_index()
+                    if single_monthly.empty:
+                        st.info("這檔股票尚無有效交易日期，無法繪製個股月圖。")
+                    else:
+                        st.markdown("### 個股圖表 Y 軸範圍")
+                        single_chart_values = single_monthly[
+                            ["實際買入金額", "實際賣出金額"]
+                        ].to_numpy(dtype=float)
+                        single_data_min = min(0.0, float(single_chart_values.min()))
+                        single_data_max = max(0.0, float(single_chart_values.max()))
+                        single_padding = max(
+                            (single_data_max - single_data_min) * 0.1, 1.0
+                        )
+                        single_default_y_min = single_data_min - single_padding
+                        single_default_y_max = single_data_max + single_padding
+                        single_chart_key = str(selected_id).replace(".", "_")
+                        custom_single_y_range = st.checkbox(
+                            "自訂個股圖表 Y 軸上下限",
+                            key=f"custom_single_y_range_{single_chart_key}",
+                        )
+                        single_y_range = None
+                        if custom_single_y_range:
+                            single_y_min_col, single_y_max_col = st.columns(2)
+                            with single_y_min_col:
+                                single_y_min = st.number_input(
+                                    "個股圖表 Y 軸下限",
+                                    value=single_default_y_min,
+                                    step=max(single_padding, 1.0),
+                                    format="%.2f",
+                                    key=f"single_y_min_{single_chart_key}",
+                                )
+                            with single_y_max_col:
+                                single_y_max = st.number_input(
+                                    "個股圖表 Y 軸上限",
+                                    value=single_default_y_max,
+                                    step=max(single_padding, 1.0),
+                                    format="%.2f",
+                                    key=f"single_y_max_{single_chart_key}",
+                                )
+                            if single_y_min >= single_y_max:
+                                st.error("個股圖表 Y 軸下限必須小於上限。")
+                            else:
+                                single_y_range = [single_y_min, single_y_max]
+
+                        if not custom_single_y_range or single_y_range is not None:
+                            single_labels = single_monthly.index.astype(str).tolist()
+                            fig2 = go.Figure()
+                            fig2.add_trace(go.Scatter(
+                                x=single_labels,
+                                y=single_monthly["實際買入金額"],
+                                mode="lines+markers",
+                                name="實際買入金額",
+                                marker={"size": 12},
+                            ))
+                            fig2.add_trace(go.Scatter(
+                                x=single_labels,
+                                y=single_monthly["實際賣出金額"],
+                                mode="lines+markers",
+                                name="實際賣出金額",
+                                marker={"color": "green", "symbol": "diamond", "size": 12},
+                                line={"color": "green"},
+                            ))
+                            fig2.update_layout(
+                                title=f"個股每月買賣金額（{selected_stock}）",
+                                xaxis_title="月份",
+                                yaxis_title="金額",
+                                xaxis={"type": "category"},
+                                yaxis={"range": single_y_range},
+                            )
+                            st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.info("新增交易資料後，這裡會顯示每月及個股買賣統計圖表。")
