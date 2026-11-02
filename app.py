@@ -630,8 +630,8 @@ if selected_system == "台幣換匯系統":
     render_fx_system()
     st.stop()
 
-st.title("📈 股票買賣記錄與即時監控系統")
-version_number = "20261021. CS. V1.0 最終版"
+st.title("📈 Selene股票買賣記錄與即時監控系統")
+version_number = "20261102. CS. V1.0 最終版"
 st.write(f"📊 系統版本: {version_number}")
 
 # ==================== Yahoo 股市價格抓取 ====================
