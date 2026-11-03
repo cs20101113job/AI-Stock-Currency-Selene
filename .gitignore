@@ -1,1 +1,6 @@
+.streamlit/secrets.toml
+.streamlit/secrets*
+*.env
+__pycache__/
+streamlit/secrets.toml
 .DS_Store
